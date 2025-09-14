@@ -9,24 +9,72 @@ import requests
 from PIL import Image, ImageTk
 from tkinter import messagebox, ttk
 from timezonefinder import TimezoneFinder
-
+import mysql.connector
 
 from datetime import datetime, timedelta
 
 def getWeather():
+
     city = textfield.get()
     geolocator = Nominatim(user_agent="new")
     location = geolocator.geocode(city)
-    
     if location is None:
         messagebox.showerror("Error", "City not found")
         return
-    
+
+    # Connect to MySQL
+
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="user",  # change if needed
+            password="123",  # change if needed
+            database="weatherdb"  # change to your database name
+        )
+        cursor = conn.cursor()
+    except Exception as e:
+        print(f"MySQL connection error: {e}")
+        messagebox.showerror("Error", "Database connection failed")
+        return
+
+    # Check for cached data within 6 hours using user's schema
+    now = datetime.now()
+    today = now.date()
+    six_hours_ago = (now - timedelta(hours=6)).time()
+    cursor.execute("""
+        SELECT TemperatureCelsius, Humidity, Pressure, WindSpeed, Description, Date, Time
+        FROM WeatherData
+        WHERE City=%s AND Date=%s AND Time >= %s
+        ORDER BY Date DESC, Time DESC LIMIT 1
+    """, (city, today, six_hours_ago))
+    cached = cursor.fetchone()
+
+    if cached:
+        temp, humidity, pressure, wind_speed, description, date_accessed, time_accessed = cached
+        print(f"Using cached data for {city} from {date_accessed} {time_accessed}")
+        t.config(text=f" {temp}°C")
+        h.config(text=f" {humidity}%")
+        p.config(text=f" {pressure} hPa")
+        w.config(text=f" {wind_speed} m/s")
+        d.config(text=f" {description}")
+        # Set timezone and lat/long labels
+        obj = TimezoneFinder()
+        result = obj.timezone_at(lat=location.latitude, lng=location.longitude)
+        timezone.config(text=result)
+        long_lat.config(text=f"{round(location.latitude, 4)}°N {round(location.longitude, 4)}°E")
+        home = pytz.timezone(result)
+        local_time = datetime.now(home)
+        current_time = local_time.strftime("%I:%M %p")
+        clock.config(text=current_time)
+        cursor.close()
+        conn.close()
+        return
+
+    # If not cached, fetch from API
     obj = TimezoneFinder()
     result = obj.timezone_at(lat=location.latitude, lng=location.longitude)
     timezone.config(text=result)
     long_lat.config(text=f"{round(location.latitude, 4)}°N {round(location.longitude, 4)}°E")
-    
     home = pytz.timezone(result)
     local_time = datetime.now(home)
     current_time = local_time.strftime("%I:%M %p")
@@ -34,22 +82,18 @@ def getWeather():
 
     api_key = "a1e27e7d760f379244f0e442b9ca9a93"  # Replace with your valid API key
     api = f"https://api.openweathermap.org/data/2.5/forecast?q={city}&appid={api_key}&units=metric"
-    
     response = requests.get(api)
     json_data = response.json()
-
     print("Raw JSON data:", json_data)
-
-    # The forecast API returns 'cod' as a string
     if json_data.get('cod') != "200":
         messagebox.showerror("Error", json_data.get('message', 'Failed to retrieve data'))
+        cursor.close()
+        conn.close()
         return
 
-    # Find the forecast entry closest to current time for current day weather
     current_datetime = datetime.now()
     closest_entry = None
     min_diff = timedelta.max
-
     for entry in json_data['list']:
         entry_datetime = datetime.strptime(entry['dt_txt'], "%Y-%m-%d %H:%M:%S")
         diff = abs(entry_datetime - current_datetime)
@@ -63,14 +107,21 @@ def getWeather():
         pressure = closest_entry['main']['pressure']
         wind_speed = closest_entry['wind']['speed']
         description = closest_entry['weather'][0]['description']
-
         print(f"Current Weather - Temp: {temp}°C, Humidity: {humidity}%, Pressure: {pressure} hPa, Wind Speed: {wind_speed} m/s, Description: {description}")
-
         t.config(text=f" {temp}°C")
         h.config(text=f" {humidity}%")
         p.config(text=f" {pressure} hPa")
         w.config(text=f" {wind_speed} m/s")
         d.config(text=f" {description}")
+        # Store in DB using user's schema
+        now = datetime.now()
+        today = now.date()
+        current_time = now.time()
+        cursor.execute("INSERT INTO WeatherData (Date, City, Time, TemperatureCelsius, Humidity, Pressure, WindSpeed, Description) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (today, city, current_time, temp, humidity, pressure, wind_speed, description))
+        conn.commit()
+    cursor.close()
+    conn.close()
 
     # Extract daily forecasts at 12:00 PM
     daily_data = [entry for entry in json_data['list'] if "12:00:00" in entry['dt_txt']]
@@ -111,13 +162,13 @@ root.config(bg="#1E1E2E")
 
 # ICON
 try:
-    image_icon = PhotoImage(file="Images (1)/Screenshot 2025-07-08 at 7.08.07 PM (1).png")
+    image_icon = PhotoImage(file="Weather Box - images (1))/Images (1)/Screenshot 2025-07-08 at 7.08.07 PM (1).png")
     root.iconphoto(False, image_icon)
 except Exception as e:
     print(f"Could not load icon: {e}")
 
 # Round box
-Round_box = PhotoImage(file="Images (1)/Rounded Rectangle 2 (1).png")
+Round_box = PhotoImage(file="Weather Box - images (1))/Images (1)/Rounded Rectangle 2 (1).png")
 Label(root, image=Round_box, bg="#1E1E2E").place(x=13, y=60)
 
 # LABELS
@@ -133,18 +184,18 @@ label15 = Label(root, text="Description", font=("Helvetica", 11), fg="#AFB1C3", 
 label15.place(x=40, y=155)
 
 # SEARCH BOX
-Search_image = PhotoImage(file="Images (1)/Rounded Rectangle 3 (1).png")
+Search_image = PhotoImage(file="Weather Box - images (1))/Images (1)/Rounded Rectangle 3 (1).png")
 myimage = Label(root, image=Search_image, bg="#1E1E2E")
 myimage.place(x=270, y=122)
 
-weat_image = PhotoImage(file="Images (1)/Layer 7 (1).png")
+weat_image = PhotoImage(file="Weather Box - images (1))/Images (1)/Layer 7 (1).png")
 weatherimage = Label(root, image=weat_image, bg="#333c4c")
 weatherimage.place(x=294, y=127)
 
 textfield = tk.Entry(root, justify="center", width=15, font=("poppins", 25, "bold"),  bg="#333c4c", border=0, fg="white")
 textfield.place(x=370, y=130)
 
-Search_icon = PhotoImage(file="Images (1)/Layer 6 (1).png")
+Search_icon = PhotoImage(file="Weather Box - images (1))/Images (1)/Layer 6 (1).png")
 myimage_icon = Button(root, image=Search_icon, borderwidth=0, cursor="hand2", bg="#333c4c", command=getWeather)
 myimage_icon.place(x=640, y=135)
 
@@ -158,8 +209,8 @@ canvas.create_window((0, 0), window=frame, anchor="nw")
 
 # Load images with error handling
 try:
-    firstbox = PhotoImage(file="Images (1)/Rounded Rectangle 2 (1).png")
-    secondbox = PhotoImage(file="Images (1)/Rounded Rectangle 2 copy (1).png")
+    firstbox = PhotoImage(file="Weather Box - images (1))/Images (1)/Rounded Rectangle 2 (1).png")
+    secondbox = PhotoImage(file="Weather Box - images (1))/Images (1)/rounded_rectangle_C0BFBB.png")
     
     # Create labels with proper parent hierarchy
     Label(frame, image=firstbox, bg="#4C6EF5").grid(row=0, column=0, padx=47, pady=40)
@@ -253,4 +304,6 @@ day5.place(x=10, y=5)
 day5temp = Label(fifthframe, bg="#C0BFBB", fg="#000")
 day5temp.place(x=1, y=70)
 
+print("Starting Tkinter main loop")
 root.mainloop()
+print("Tkinter main loop has ended")
